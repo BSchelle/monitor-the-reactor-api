@@ -3,106 +3,100 @@ import pandas as pd
 import numpy as np
 import os
 import tensorflow as tf
+import pickle
 
 app = FastAPI()
 
-# --- Variable globale pour le modèle ---
+# --- Variables globales ---
 model = None
+scaler = None
 
-# --- Chargement du modèle au démarrage ---
+# --- Chargement Modèle ET Scaler au démarrage ---
 @app.on_event("startup")
-def load_model():
-    global model
+def load_resources():
+    global model, scaler
+
+    # 1. Chargement du modèle
     try:
-        # Chemin selon votre structure Docker
         model_path = "app/models/models.keras"
         if os.path.exists(model_path):
             model = tf.keras.models.load_model(model_path)
-            print(f"Modèle chargé avec succès depuis : {model_path}")
+            print(f"✅ Modèle chargé : {model_path}")
         else:
-            print(f"ATTENTION : Modèle introuvable à {model_path}")
+            print(f"❌ Modèle introuvable : {model_path}")
     except Exception as e:
-        print(f"Erreur lors du chargement du modèle : {e}")
+        print(f"❌ Erreur chargement modèle : {e}")
+
+    # 2. Chargement du Scaler
+    try:
+        scaler_path = "app/models/scaler.pkl"
+        if os.path.exists(scaler_path):
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            print(f"✅ Scaler chargé : {scaler_path}")
+        else:
+            print(f"❌ Scaler introuvable : {scaler_path}")
+    except Exception as e:
+        print(f"❌ Erreur chargement scaler : {e}")
 
 @app.get("/")
 def read_root():
-    service = os.environ.get('K_SERVICE', 'Local API')
-    return {"message": f"Bonjour depuis {service}"}
+    return {"message": "API Monitor Reactor Ready"}
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
-@app.get("/get-process-data")
-def get_process_data():
-    try:
-        csv_path = "app/data/data.csv"
-        if not os.path.exists(csv_path):
-            return {"error": "Fichier data.csv introuvable."}
-
-        df = pd.read_csv(csv_path)
-        # Sélection des colonnes pour les graphes temps réel
-        cols = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
-        return df[cols].to_dict(orient='records')
-    except Exception as e:
-        return {"error": str(e)}
-
-# --- NOUVELLE ROUTE : Prédiction IA ---
 @app.get("/predict-faults")
 def predict_faults():
-    global model
+    global model, scaler
+
     if model is None:
         return {"error": "Le modèle n'est pas chargé."}
+    if scaler is None:
+        return {"error": "Le scaler (normalisation) n'est pas chargé."}
 
     try:
         csv_path = "app/data/data.csv"
         if not os.path.exists(csv_path):
             return {"error": "Fichier data.csv introuvable."}
 
-        # 1. Lecture
+        # Lecture CSV
         df = pd.read_csv(csv_path)
 
-        # 2. Identification des 52 Features
-        # xmeas_1 à xmeas_41 et xmv_1 à xmv_11
+        # Identification des 52 Features
         feature_cols = [f'xmeas_{i}' for i in range(1, 42)] + \
                        [f'xmv_{i}' for i in range(1, 12)]
 
-        # Vérification rapide
-        if not all(col in df.columns for col in feature_cols):
-            return {"error": "Colonnes de features manquantes dans le CSV"}
+        # Récupération des données brutes
+        raw_data = df[feature_cols].values
 
-        data_matrix = df[feature_cols].values # Convertir en numpy array
+        # --- NORMALISATION ---
+        # C'est l'étape clé ajoutée : on transforme les données brutes
+        normalized_data = scaler.transform(raw_data)
+
         samples_idx = df['sample'].values
-
-        # 3. Préparation des séquences (Sliding Window)
-        # On a besoin de 50 pas de temps passés. On commence donc à l'index 50.
-        # On avance de 10 en 10 (step=10).
-
         sequences = []
-        timestamps = [] # Pour l'axe X du graphe
+        timestamps = []
 
+        # Paramètres sliding window
         start_index = 50
         step = 10
         limit = len(df)
 
         for i in range(start_index, limit, step):
-            # Récupérer la fenêtre [i-50 : i] -> Forme (50, 52)
-            window = data_matrix[i-50 : i]
+            # On prend les données NORMALISÉES ici
+            window = normalized_data[i-50 : i]
             sequences.append(window)
             timestamps.append(samples_idx[i])
 
         if not sequences:
-            return {"message": "Pas assez de données pour prédire (min 50 samples)."}
+            return {"message": "Pas assez de données."}
 
-        # Conversion en np.array de forme (N_batch, 50, 52)
+        # Array final (N, 50, 52)
         X_input = np.array(sequences)
 
-        # 4. Prédiction
-        # Le modèle sort (N, 21). On prend l'argmax pour avoir la classe (0-20)
+        # Prédiction
         predictions = model.predict(X_input)
         predicted_classes = np.argmax(predictions, axis=1)
 
-        # 5. Formater la réponse pour Streamlit
+        # Formatage
         results = []
         for t, pred_class in zip(timestamps, predicted_classes):
             results.append({
