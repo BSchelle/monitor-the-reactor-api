@@ -4,10 +4,8 @@ import os
 
 app = FastAPI()
 
-
 @app.get("/")
 def read_root():
-    # On récupère le nom du service pour voir où on est (optionnel)
     service = os.environ.get('K_SERVICE', 'Local API')
     return {"message": f"Bonjour depuis {service}"}
 
@@ -18,12 +16,14 @@ def health_check():
 @app.get("/get-process-data")
 def get_process_data():
     try:
-        # Si votre structure est app/data/data.csv et WORKDIR est /code
+        # Chemin relatif basé sur WORKDIR /code dans le Dockerfile
         csv_path = "app/data/data.csv"
 
         # Vérification si le fichier existe
         if not os.path.exists(csv_path):
-            return {"error": f"Fichier non trouvé au chemin : {csv_path}"}
+            # Astuce de debug : On affiche le dossier actuel pour comprendre l'erreur
+            cwd = os.getcwd()
+            return {"error": f"Fichier introuvable. Chemin cherché : {csv_path}. Dossier actuel : {cwd}"}
 
         # Lecture du CSV
         df = pd.read_csv(csv_path)
@@ -31,18 +31,11 @@ def get_process_data():
         # FILTRAGE : On ne garde que les colonnes utiles
         colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
 
-        # On sélectionne uniquement ces colonnes
-        # Si une colonne manque, cela lèvera une erreur (ce qui est mieux que d'envoyer de mauvaises données)
+        # Sélection des colonnes (renvoie une erreur si une colonne manque)
         df_filtered = df[colonnes_a_garder]
 
-        # 3. Conversion en JSON
+        # Conversion et envoi de la réponse
         return df_filtered.to_dict(orient='records')
-
-        # On convertit le DataFrame en dictionnaire (JSON compatible)
-        # orient='records' crée une liste d'objets : [{"Pression": 10, ...}, ...]
-        data_json = df.to_dict(orient='records')
-
-        return data_json
 
     except Exception as e:
         return {"error": str(e)}
