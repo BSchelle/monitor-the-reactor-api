@@ -4,38 +4,52 @@ import os
 
 app = FastAPI()
 
+# --- Route Racine (Pour le message de bienvenue) ---
 @app.get("/")
 def read_root():
+    # On récupère le nom du service pour voir où on est (Cloud Run ou Local)
     service = os.environ.get('K_SERVICE', 'Local API')
     return {"message": f"Bonjour depuis {service}"}
 
+# --- Route Health (Pour vérifier que l'API tourne) ---
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
+# --- Route Data (Celle qui manque actuellement) ---
 @app.get("/get-process-data")
 def get_process_data():
     try:
-        # Chemin relatif basé sur WORKDIR /code dans le Dockerfile
+        # Chemin relatif vers le fichier dans le conteneur Docker
+        # Basé sur WORKDIR /code et COPY ./app /code/app
         csv_path = "app/data/data.csv"
 
-        # Vérification si le fichier existe
+        # 1. Vérification si le fichier existe
         if not os.path.exists(csv_path):
-            # Astuce de debug : On affiche le dossier actuel pour comprendre l'erreur
-            cwd = os.getcwd()
-            return {"error": f"Fichier introuvable. Chemin cherché : {csv_path}. Dossier actuel : {cwd}"}
+            # En cas d'erreur, on affiche le dossier courant pour aider au debug
+            current_dir = os.getcwd()
+            return {
+                "error": f"Fichier introuvable au chemin : '{csv_path}'.",
+                "debug_info": f"Dossier actuel du serveur : {current_dir}"
+            }
 
-        # Lecture du CSV
+        # 2. Lecture du CSV
         df = pd.read_csv(csv_path)
 
-        # FILTRAGE : On ne garde que les colonnes utiles
+        # 3. FILTRAGE : On ne garde que les colonnes utiles
         colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
 
-        # Sélection des colonnes (renvoie une erreur si une colonne manque)
+        # On vérifie que les colonnes existent bien pour éviter un crash silencieux
+        missing_cols = [col for col in colonnes_a_garder if col not in df.columns]
+        if missing_cols:
+            return {"error": f"Colonnes manquantes dans le CSV : {missing_cols}"}
+
+        # Sélection des colonnes
         df_filtered = df[colonnes_a_garder]
 
-        # Conversion et envoi de la réponse
+        # 4. Conversion en JSON (Liste de dictionnaires)
         return df_filtered.to_dict(orient='records')
 
     except Exception as e:
-        return {"error": str(e)}
+        # En cas de gros crash (ex: pandas pas installé, fichier corrompu...)
+        return {"error": f"Erreur interne du serveur : {str(e)}"}
