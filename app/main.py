@@ -1,55 +1,116 @@
 from fastapi import FastAPI
 import pandas as pd
+import numpy as np
 import os
+import tensorflow as tf
 
 app = FastAPI()
 
-# --- Route Racine (Pour le message de bienvenue) ---
+# --- Variable globale pour le modèle ---
+model = None
+
+# --- Chargement du modèle au démarrage ---
+@app.on_event("startup")
+def load_model():
+    global model
+    try:
+        # Chemin selon votre structure Docker
+        model_path = "app/models/models.keras"
+        if os.path.exists(model_path):
+            model = tf.keras.models.load_model(model_path)
+            print(f"Modèle chargé avec succès depuis : {model_path}")
+        else:
+            print(f"ATTENTION : Modèle introuvable à {model_path}")
+    except Exception as e:
+        print(f"Erreur lors du chargement du modèle : {e}")
+
 @app.get("/")
 def read_root():
-    # On récupère le nom du service pour voir où on est (Cloud Run ou Local)
     service = os.environ.get('K_SERVICE', 'Local API')
     return {"message": f"Bonjour depuis {service}"}
 
-# --- Route Health (Pour vérifier que l'API tourne) ---
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
-# --- Route Data (Celle qui manque actuellement) ---
 @app.get("/get-process-data")
 def get_process_data():
     try:
-        # Chemin relatif vers le fichier dans le conteneur Docker
-        # Basé sur WORKDIR /code et COPY ./app /code/app
         csv_path = "app/data/data.csv"
-
-        # 1. Vérification si le fichier existe
         if not os.path.exists(csv_path):
-            # En cas d'erreur, on affiche le dossier courant pour aider au debug
-            current_dir = os.getcwd()
-            return {
-                "error": f"Fichier introuvable au chemin : '{csv_path}'.",
-                "debug_info": f"Dossier actuel du serveur : {current_dir}"
-            }
+            return {"error": "Fichier data.csv introuvable."}
 
-        # 2. Lecture du CSV
+        df = pd.read_csv(csv_path)
+        # Sélection des colonnes pour les graphes temps réel
+        cols = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
+        return df[cols].to_dict(orient='records')
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- NOUVELLE ROUTE : Prédiction IA ---
+@app.get("/predict-faults")
+def predict_faults():
+    global model
+    if model is None:
+        return {"error": "Le modèle n'est pas chargé."}
+
+    try:
+        csv_path = "app/data/data.csv"
+        if not os.path.exists(csv_path):
+            return {"error": "Fichier data.csv introuvable."}
+
+        # 1. Lecture
         df = pd.read_csv(csv_path)
 
-        # 3. FILTRAGE : On ne garde que les colonnes utiles
-        colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
+        # 2. Identification des 52 Features
+        # xmeas_1 à xmeas_41 et xmv_1 à xmv_11
+        feature_cols = [f'xmeas_{i}' for i in range(1, 42)] + \
+                       [f'xmv_{i}' for i in range(1, 12)]
 
-        # On vérifie que les colonnes existent bien pour éviter un crash silencieux
-        missing_cols = [col for col in colonnes_a_garder if col not in df.columns]
-        if missing_cols:
-            return {"error": f"Colonnes manquantes dans le CSV : {missing_cols}"}
+        # Vérification rapide
+        if not all(col in df.columns for col in feature_cols):
+            return {"error": "Colonnes de features manquantes dans le CSV"}
 
-        # Sélection des colonnes
-        df_filtered = df[colonnes_a_garder]
+        data_matrix = df[feature_cols].values # Convertir en numpy array
+        samples_idx = df['sample'].values
 
-        # 4. Conversion en JSON (Liste de dictionnaires)
-        return df_filtered.to_dict(orient='records')
+        # 3. Préparation des séquences (Sliding Window)
+        # On a besoin de 50 pas de temps passés. On commence donc à l'index 50.
+        # On avance de 10 en 10 (step=10).
+
+        sequences = []
+        timestamps = [] # Pour l'axe X du graphe
+
+        start_index = 50
+        step = 10
+        limit = len(df)
+
+        for i in range(start_index, limit, step):
+            # Récupérer la fenêtre [i-50 : i] -> Forme (50, 52)
+            window = data_matrix[i-50 : i]
+            sequences.append(window)
+            timestamps.append(samples_idx[i])
+
+        if not sequences:
+            return {"message": "Pas assez de données pour prédire (min 50 samples)."}
+
+        # Conversion en np.array de forme (N_batch, 50, 52)
+        X_input = np.array(sequences)
+
+        # 4. Prédiction
+        # Le modèle sort (N, 21). On prend l'argmax pour avoir la classe (0-20)
+        predictions = model.predict(X_input)
+        predicted_classes = np.argmax(predictions, axis=1)
+
+        # 5. Formater la réponse pour Streamlit
+        results = []
+        for t, pred_class in zip(timestamps, predicted_classes):
+            results.append({
+                "sample": int(t),
+                "prediction": int(pred_class)
+            })
+
+        return results
 
     except Exception as e:
-        # En cas de gros crash (ex: pandas pas installé, fichier corrompu...)
-        return {"error": f"Erreur interne du serveur : {str(e)}"}
+        return {"error": f"Erreur de prédiction : {str(e)}"}
