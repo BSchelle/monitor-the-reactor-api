@@ -1,110 +1,55 @@
 from fastapi import FastAPI
 import pandas as pd
-import numpy as np
 import os
-import tensorflow as tf
-import pickle
 
 app = FastAPI()
 
-# --- Variables globales ---
-model = None
-scaler = None
-
-# --- Chargement Modèle ET Scaler au démarrage ---
-@app.on_event("startup")
-def load_resources():
-    global model, scaler
-
-    # 1. Chargement du modèle
-    try:
-        model_path = "app/models/models.keras"
-        if os.path.exists(model_path):
-            model = tf.keras.models.load_model(model_path)
-            print(f"✅ Modèle chargé : {model_path}")
-        else:
-            print(f"❌ Modèle introuvable : {model_path}")
-    except Exception as e:
-        print(f"❌ Erreur chargement modèle : {e}")
-
-    # 2. Chargement du Scaler
-    try:
-        scaler_path = "app/models/scaler.pkl"
-        if os.path.exists(scaler_path):
-            with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
-            print(f"✅ Scaler chargé : {scaler_path}")
-        else:
-            print(f"❌ Scaler introuvable : {scaler_path}")
-    except Exception as e:
-        print(f"❌ Erreur chargement scaler : {e}")
-
+# --- Route Racine (Pour le message de bienvenue) ---
 @app.get("/")
 def read_root():
-    return {"message": "API Monitor Reactor Ready"}
+    # On récupère le nom du service pour voir où on est (Cloud Run ou Local)
+    service = os.environ.get('K_SERVICE', 'Local API')
+    return {"message": f"Bonjour depuis {service}"}
 
-@app.get("/predict-faults")
-def predict_faults():
-    global model, scaler
+# --- Route Health (Pour vérifier que l'API tourne) ---
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
-    if model is None:
-        return {"error": "Le modèle n'est pas chargé."}
-    if scaler is None:
-        return {"error": "Le scaler (normalisation) n'est pas chargé."}
-
+# --- Route Data (Celle qui manque actuellement) ---
+@app.get("/get-process-data")
+def get_process_data():
     try:
+        # Chemin relatif vers le fichier dans le conteneur Docker
+        # Basé sur WORKDIR /code et COPY ./app /code/app
         csv_path = "app/data/data.csv"
-        if not os.path.exists(csv_path):
-            return {"error": "Fichier data.csv introuvable."}
 
-        # Lecture CSV
+        # 1. Vérification si le fichier existe
+        if not os.path.exists(csv_path):
+            # En cas d'erreur, on affiche le dossier courant pour aider au debug
+            current_dir = os.getcwd()
+            return {
+                "error": f"Fichier introuvable au chemin : '{csv_path}'.",
+                "debug_info": f"Dossier actuel du serveur : {current_dir}"
+            }
+
+        # 2. Lecture du CSV
         df = pd.read_csv(csv_path)
 
-        # Identification des 52 Features
-        feature_cols = [f'xmeas_{i}' for i in range(1, 42)] + \
-                       [f'xmv_{i}' for i in range(1, 12)]
+        # 3. FILTRAGE : On ne garde que les colonnes utiles
+        colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
 
-        # Récupération des données brutes
-        raw_data = df[feature_cols].values
+        # On vérifie que les colonnes existent bien pour éviter un crash silencieux
+        missing_cols = [col for col in colonnes_a_garder if col not in df.columns]
+        if missing_cols:
+            return {"error": f"Colonnes manquantes dans le CSV : {missing_cols}"}
 
-        # --- NORMALISATION ---
-        # C'est l'étape clé ajoutée : on transforme les données brutes
-        normalized_data = scaler.transform(raw_data)
+        # Sélection des colonnes
+        df_filtered = df[colonnes_a_garder]
 
-        samples_idx = df['sample'].values
-        sequences = []
-        timestamps = []
-
-        # Paramètres sliding window
-        start_index = 50
-        step = 10
-        limit = len(df)
-
-        for i in range(start_index, limit, step):
-            # On prend les données NORMALISÉES ici
-            window = normalized_data[i-50 : i]
-            sequences.append(window)
-            timestamps.append(samples_idx[i])
-
-        if not sequences:
-            return {"message": "Pas assez de données."}
-
-        # Array final (N, 50, 52)
-        X_input = np.array(sequences)
-
-        # Prédiction
-        predictions = model.predict(X_input)
-        predicted_classes = np.argmax(predictions, axis=1)
-
-        # Formatage
-        results = []
-        for t, pred_class in zip(timestamps, predicted_classes):
-            results.append({
-                "sample": int(t),
-                "prediction": int(pred_class)
-            })
-
-        return results
+        # 4. Conversion en JSON (Liste de dictionnaires)
+        return df_filtered.to_dict(orient='records')
 
     except Exception as e:
-        return {"error": f"Erreur de prédiction : {str(e)}"}
+        # En cas de gros crash (ex: pandas pas installé, fichier corrompu...)
+        return {"error": f"Erreur interne du serveur : {str(e)}"}
