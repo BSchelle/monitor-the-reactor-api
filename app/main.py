@@ -22,22 +22,24 @@ def get_process_data():
     try:
         # Chemin relatif vers le fichier dans le conteneur Docker
         # Basé sur WORKDIR /code et COPY ./app /code/app
-        csv_path = "https://storage.googleapis.com/jubenkai-bucket/data.csv"
+        #csv_path = "https://storage.googleapis.com/jubenkai-bucket/data.csv"
 
+        # Stockage sur l'API
+        csv_path = "app/data/data.csv"
         # 1. Vérification si le fichier existe en local
-        #if not os.path.exists(csv_path):
-        #    # En cas d'erreur, on affiche le dossier courant pour aider au debug
-        #    current_dir = os.getcwd()
-        #    return {
-        #        "error": f"Fichier introuvable au chemin : '{csv_path}'.",
-        #        "debug_info": f"Dossier actuel du serveur : {current_dir}"
-        #    }
+        if not os.path.exists(csv_path):
+            # En cas d'erreur, on affiche le dossier courant pour aider au debug
+            current_dir = os.getcwd()
+            return {
+                "error": f"Fichier introuvable au chemin : '{csv_path}'.",
+                "debug_info": f"Dossier actuel du serveur : {current_dir}"
+            }
 
         # 2. Lecture du CSV
         df = pd.read_csv(csv_path)
 
         # 3. FILTRAGE : On ne garde que les colonnes utiles
-        colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10']
+        colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10', 'faults_pred']
 
         # On vérifie que les colonnes existent bien pour éviter un crash silencieux
         missing_cols = [col for col in colonnes_a_garder if col not in df.columns]
