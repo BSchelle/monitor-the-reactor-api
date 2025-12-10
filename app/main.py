@@ -22,16 +22,16 @@ def get_process_data():
     try:
         # Chemin relatif vers le fichier dans le conteneur Docker
         # Basé sur WORKDIR /code et COPY ./app /code/app
-        csv_path = "app/data/data.csv"
+        csv_path = "https://storage.googleapis.com/jubenkai-bucket/data.csv"
 
-        # 1. Vérification si le fichier existe
-        if not os.path.exists(csv_path):
-            # En cas d'erreur, on affiche le dossier courant pour aider au debug
-            current_dir = os.getcwd()
-            return {
-                "error": f"Fichier introuvable au chemin : '{csv_path}'.",
-                "debug_info": f"Dossier actuel du serveur : {current_dir}"
-            }
+        # 1. Vérification si le fichier existe en local
+        #if not os.path.exists(csv_path):
+        #    # En cas d'erreur, on affiche le dossier courant pour aider au debug
+        #    current_dir = os.getcwd()
+        #    return {
+        #        "error": f"Fichier introuvable au chemin : '{csv_path}'.",
+        #        "debug_info": f"Dossier actuel du serveur : {current_dir}"
+        #    }
 
         # 2. Lecture du CSV
         df = pd.read_csv(csv_path)

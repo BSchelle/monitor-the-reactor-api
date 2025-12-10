@@ -1,5 +1,5 @@
 # 1. On passe en Python 3.10 pour matcher votre environnement local
-FROM python:3.10-slim
+FROM python:3.10.6-buster
 
 WORKDIR /code
 
