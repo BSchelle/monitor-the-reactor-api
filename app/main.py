@@ -39,7 +39,7 @@ def get_process_data():
         df = pd.read_csv(csv_path)
 
         # 3. FILTRAGE : On ne garde que les colonnes utiles
-        colonnes_a_garder = ['sample', 'xmeas_7', 'xmeas_9', 'xmeas_10', 'faults_pred']
+        colonnes_a_garder = ['faultNumber','sample', 'xmeas_7', 'xmeas_9', 'xmeas_10', 'detector','faults_pred','delta']
 
         # On vérifie que les colonnes existent bien pour éviter un crash silencieux
         missing_cols = [col for col in colonnes_a_garder if col not in df.columns]
